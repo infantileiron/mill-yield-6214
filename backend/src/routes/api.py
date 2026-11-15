@@ -22,15 +22,17 @@ def get_inspections(batch_id:int|None=None,db=Depends(get_db),u=Depends(current)
 def add_inspection(data:InspectionInput,db=Depends(get_db),u=Depends(writable)):return business.add_inspection(db,data.model_dump())
 @router.get('/reviews')
 def get_reviews(db=Depends(get_db),u=Depends(current)):
-    return [{k:v for k,v in record(x).items() if k!='snapshot'} for x in db.scalars(select(Review).order_by(Review.id.desc()))]
+    return [{k:v for k,v in business.review_payload(db,x,include_snapshot=False).items() if k!='attempts'} for x in db.scalars(select(Review).order_by(Review.id.desc()))]
 @router.post('/reviews',status_code=202)
 def create_review(data:ReviewInput,db=Depends(get_db),u=Depends(writable)):return business.submit(db,data.model_dump(),u)
 @router.get('/reviews/{id}')
-def get_review(id:int,db=Depends(get_db),u=Depends(current)):return record(business.review(db,id))
+def get_review(id:int,db=Depends(get_db),u=Depends(current)):return business.review_payload(db,business.review(db,id))
+@router.get('/reviews/{id}/attempts')
+def get_attempts(id:int,db=Depends(get_db),u=Depends(current)):return business.attempts(db,id)
 @router.post('/reviews/{id}/approve')
 def approve(id:int,data:ApprovalInput,db=Depends(get_db),u=Depends(admin)):return business.approve(db,id,data.note,u)
 @router.get('/reviews/{id}/export')
-def export(id:int,db=Depends(get_db),u=Depends(current)):return export_review(business.review(db,id))
+def export(id:int,db=Depends(get_db),u=Depends(current)):return export_review(business.review(db,id),db)
 @router.get('/audits')
 def audits(db=Depends(get_db),u=Depends(admin)):return [record(x) for x in db.scalars(select(Audit).order_by(Audit.id.desc()).limit(100))]
 @router.get('/counts')

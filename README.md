@@ -65,6 +65,20 @@ docker compose down -v --remove-orphans
 
 后台 worker 从 Redis 消费复核 id，更新 queued→running→completed/failed，写结果至共享 artifacts 卷。重启时会扫描未完成任务并重新排队。负责人仅能签核 completed 状态，签核后不可重复签核。CSV 导出包含状态、口径值、签核意见和所有冻结样本。
 
+### 可恢复的复核执行
+
+Redis 只是唤醒提示，任务归属以 PostgreSQL 为准，因此重复投递、进程中断和队列停机都不会造成重复计算或结果被抢写。
+
+- **受理即冻结**：提交时一次写入样本快照和快照 SHA-256。停机恢复、重试和接管都沿用原复核单与原冻结样本，不会重新读取检验表。
+- **执行权与租约**：worker 用 `SELECT … FOR UPDATE SKIP LOCKED` 领取任务，同时签发一次性 `execution_token` 并占用租约（默认 30 秒，运行中每 10 秒续约）。同一复核单同时只有一个有效执行权，其余重复消息直接跳过。
+- **栅栏写入**：发布结果文件、写入 `result`、置为 completed 都必须匹配当前 `execution_token` 且租约有效。失去执行权的旧进程恢复后只能得到 `skipped`/`fenced`，无法改写结果或签核。
+- **完整落盘才完成**：结果先写临时文件、fsync、回读比对，再原子 rename；随后回读校验文件与冻结样本校验值、已保存统计是否一致。全部通过才把复核单置为 completed。一致的重发是幂等的，不会重复发布。
+- **重试与上限**：写入、校验等可重试故障按退避重试（默认上限 3 次，含首次）。耗尽后置为 failed 并在页面显示失败原因；每次尝试写入 `review_attempts`（阶段、进程、耗时、错误）。
+- **自动恢复**：worker 启动及运行期间每 5 秒扫描一次，把租约过期的 running 或未完成的 queued 复核单重新排队。API 启动时还会为历史完成单补建/升级可校验的结果文件，保证原有完成单仍可导出。
+- **导出与签核放行校验**：只有结果文件存在、SHA-256 匹配、且统计校验值与数据库一致时，`release_ready` 才为 true，页面才显示完成并允许签核/导出。文件被篡改或损坏会返回 409 并提示人工核查，不会静默重建。
+
+新增相关环境变量：`ARTIFACTS_DIR`（默认 `/artifacts`）、`JOB_LEASE_SECONDS`（30）、`JOB_MAX_ATTEMPTS`（3）、`JOB_RETRY_BASE_SECONDS`（1）、`JOB_RETRY_MAX_SECONDS`（10）、`WORKER_POLL_SECONDS`（0.5）。
+
 ## 一天的工作剧本
 
 1. 08:50 观察员登录查看 `QH-1115-A`，核对 15 个已有样本。
@@ -87,5 +101,12 @@ docker compose down -v --remove-orphans
 ## 范围与已知差异
 
 小型项目仅支持逐条录入，不提供 Excel 导入和外部检验仪器同步。原始检验记录采用追加留痕模式，没有删除/覆盖接口；错误记录须重新录入并在复核意见说明。签核是本地数据库留痕，不是电子签章。图形自动覆盖全部实际样本区间，完整 0–100 桶和所有样本在 API / CSV 中保留。演示时区在报告中显式标记 UTC。前端 Google Fonts 离线时回退宋体。
+
+后台任务的生命周期测试位于 `backend/tests/`，需要一台可销毁的 PostgreSQL：
+
+```sh
+cd backend
+TEST_DATABASE_URL=postgresql+psycopg://mill@127.0.0.1:55432/mill_test pytest -q tests
+```
 
 测试脚本、1440×900 页面截图与实测证据在源码外的 `test-artifacts/gb-3101/`。License：MIT。

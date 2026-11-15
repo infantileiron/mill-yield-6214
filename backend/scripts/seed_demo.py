@@ -4,6 +4,7 @@ from src.config.database import Session,Base,engine
 from src.models.entities import User,Batch,Inspection,Review
 from src.utils.security import password_hash
 from src.services.statistics import diagnose
+from src.services import artifacts
 def seed():
     Base.metadata.create_all(engine);rng=random.Random(3101)
     with Session() as db:
@@ -24,10 +25,20 @@ def seed():
                 if not db.scalar(select(Inspection).where(Inspection.sample_code==sc)):
                     db.add(Inspection(sample_code=sc,batch_id=batch.id,flour_yield=val,moisture=moisture,inspector=['林洁','周麦','陈禾'][i%3]))
         db.flush()
-        if not db.scalar(select(Review).where(Review.title=='11月15日全线出粉率初审')):
+        demo_title='11月15日全线出粉率初审'
+        review=db.scalar(select(Review).where(Review.title==demo_title))
+        if not review:
             from src.services.business import inspections
             rows=inspections(db)
-            db.add(Review(title='11月15日全线出粉率初审',line='全部',status='completed',snapshot=rows,result=diagnose(rows),created_by='analyst@demo.local',note='待质量负责人核对异常点及签核'))
+            review=Review(title=demo_title,line='全部',status='completed',snapshot=rows,result=diagnose(rows),created_by='analyst@demo.local',note='待质量负责人核对异常点及签核')
+            db.add(review);db.flush()
+        # The seeded completed review must also have a verifiable artifact on disk.
+        snapshot_checksum=artifacts.snapshot_checksum(review.snapshot)
+        digest=review.artifact_checksum
+        if not digest:
+            _,digest=artifacts.publish(review.id,snapshot_checksum,review.result)
+        review.snapshot_checksum=snapshot_checksum
+        review.artifact_checksum=digest
         db.commit()
         print({m.__tablename__:db.scalar(select(func.count()).select_from(m)) for m in [Batch,Inspection,Review]})
 if __name__=='__main__':seed()

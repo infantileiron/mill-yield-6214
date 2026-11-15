@@ -1,8 +1,17 @@
 import csv,io
 from fastapi import HTTPException
 from fastapi.responses import Response
-def export_review(obj):
-    if obj.status not in ('completed','approved'):raise HTTPException(409,'计算完成后才可导出')
+from src.services import artifacts
+
+def export_review(obj,db=None):
+    if obj.status not in ('completed','approved'):
+        raise HTTPException(409,'计算完成后才可导出')
+    ok,reason=artifacts.verify(obj)
+    if not ok:
+        if db is not None:
+            ok,reason=artifacts.ensure_artifact(obj)
+            if ok:db.commit()
+    if not ok:raise HTTPException(409,f'结果文件未通过校验，暂不可导出：{reason}')
     output=io.StringIO();w=csv.writer(output)
     w.writerow(['复核单',obj.id,'标题',obj.title,'状态',obj.status,'范围',obj.line])
     for k in ['n','mean','std','q1','median','q3','iqr','lower','upper','checksum']:w.writerow([k,obj.result[k]])

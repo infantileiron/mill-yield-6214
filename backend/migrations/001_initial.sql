@@ -2,3 +2,21 @@
 -- This migration documents the business keys used for idempotent demo seed.
 -- batches.code UNIQUE; inspections.sample_code UNIQUE; users.email UNIQUE.
 -- reviews stores immutable JSON snapshots, result checksum and approver identity.
+
+-- Job lifecycle introduced with durable, resumable reviews.
+-- src/config/schema.py adds these columns in place on existing databases.
+-- reviews:
+--   attempt_count        attempts started so far
+--   max_attempts         retry ceiling for retryable failures
+--   execution_token      fencing token; only the holder may publish or complete
+--   lease_owner          worker identity holding the current lease
+--   lease_expires_at     claim expiry; recovery takes over after this instant
+--   next_attempt_at      backoff gate before the next attempt
+--   completed_at         when the verified result became release-ready
+--   approved_at          when the quality lead signed it
+--   failure_reason       last failure message shown to the page
+--   snapshot_checksum    SHA-256 of the frozen sample snapshot
+--   artifact_checksum    SHA-256 of the published artifact bytes
+-- review_attempts: one row per execution attempt (attempt_no UNIQUE per review).
+--   Records worker identity, execution token, phase, status, error and timing so
+--   the page can show attempt-by-attempt recovery progress.
